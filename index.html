@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuminaGuard - Sensor Node</title>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- MQTT Library (HiveMQ) -->
+    <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+    <style>
+        :root {
+            --bg-deep: #090d16;
+            --surface: #131c31;
+            --surface-border: #1e293b;
+            --accent-cyan: #06b6d4;
+            --accent-red: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .dashboard {
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+        .header h1 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .header p { font-size: 0.75rem; color: var(--text-muted); }
+        
+        .badge {
+            font-family: 'Share Tech Mono', monospace; font-size: 0.65rem; padding: 6px 10px; border-radius: 6px;
+            background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.3); text-align: right;
+        }
+        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .metric-card {
+            background: rgba(15, 23, 42, 0.6); border: 1px solid var(--surface-border); border-radius: 10px; padding: 12px; text-align: center;
+        }
+        .metric-card span { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; }
+        .metric-value { font-family: 'Share Tech Mono', monospace; font-size: 1.8rem; font-weight: bold; color: #fff; margin-top: 4px; }
+        
+        .timer-box {
+            background: rgba(15, 23, 42, 0.6); border: 1px solid var(--surface-border); border-radius: 10px; padding: 12px; margin-bottom: 16px;
+        }
+        .timer-box span { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; }
+        .timer-value { font-family: 'Share Tech Mono', monospace; font-size: 1.5rem; font-weight: bold; color: #fbbf24; margin-top: 2px; }
+
+        .action-btn {
+            width: 100%; background: linear-gradient(135deg, #ef4444, #dc2626); color: white; border: none;
+            padding: 14px; border-radius: 10px; font-weight: 600; font-size: 0.95rem; cursor: pointer; text-transform: uppercase; margin-bottom: 12px;
+        }
+        .debug-box {
+            background: #05080f; border: 1px solid var(--surface-border); border-radius: 6px;
+            padding: 8px; font-family: 'Share Tech Mono', monospace; font-size: 0.65rem; color: #94a3b8; max-height: 60px; overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <div>
+                <h1>Sensor Node</h1>
+                <p>Triple Light Guard</p>
+            </div>
+            <div id="statusBadge" class="badge">SYSTEM NORMAL</div>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <span>Current Lux</span>
+                <div id="currentLux" class="metric-value">0</div>
+            </div>
+            <div class="metric-card">
+                <span>Baseline Lux</span>
+                <div id="baselineLux" class="metric-value">0</div>
+            </div>
+        </div>
+
+        <div class="timer-box">
+            <span>Active Duration Countdown</span>
+            <div id="elapsedTimer" class="timer-value">00:00</div>
+        </div>
+
+        <button class="action-btn" onclick="toggleSystem()">Deactivate Node</button>
+        <div id="debugLog" class="debug-box">[16:05:49] Light turned ON. Tracking duration.</div>
+    </div>
+
+    <script>
+        let baseline = 50;
+        let activeSeconds = 0;
+        let timerInterval = null;
+        let isRunning = true;
+
+        // MQTT Connection (Public Broker via WebSocket)
+        const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+
+        client.on('connect', () => {
+            logDebug("Connected to MQTT Broker successfully.");
+        });
+
+        function logDebug(msg) {
+            const timeStr = new Date().toTimeString().split(' ')[0];
+            document.getElementById('debugLog').innerText = `[${timeStr}] ${msg}`;
+        }
+
+        // Ambient Light Sensor API handling
+        if ('AmbientLightSensor' in window) {
+            try {
+                const sensor = new AmbientLightSensor();
+                sensor.addEventListener('reading', () => {
+                    updateLux(sensor.illuminance);
+                });
+                sensor.start();
+            } catch (e) {
+                initSimulatedLux();
+            }
+        } else {
+            initSimulatedLux();
+        }
+
+        function initSimulatedLux() {
+            baseline = 91;
+            document.getElementById('baselineLux').innerText = baseline;
+            setInterval(() => {
+                if(!isRunning) return;
+                let cur = Math.floor(Math.random() * 60) + 120;
+                updateLux(cur);
+            }, 2000);
+        }
+
+        function updateLux(val) {
+            val = Math.round(val);
+            document.getElementById('currentLux').innerText = val;
+            
+            let status = "NORMAL";
+            let msg = "System Active & Monitoring";
+            
+            if (val > baseline + 40) {
+                status = "ALARM";
+                msg = "Critical: Duration Exceeded - Light Spike!";
+                document.getElementById('statusBadge').innerText = "CRITICAL: EXCEEDED";
+                document.getElementById('statusBadge').style.color = "#ef4444";
+            } else {
+                document.getElementById('statusBadge').innerText = "SYSTEM NORMAL";
+                document.getElementById('statusBadge').style.color = "var(--accent-cyan)";
+            }
+
+            const minutes = String(Math.floor(activeSeconds / 60)).padStart(2, '0');
+            const seconds = String(activeSeconds % 60).padStart(2, '0');
+            const elapsedStr = `${minutes}:${seconds}`;
+
+            // Broadcast data payload over MQTT topic
+            const payload = JSON.stringify({
+                status: status,
+                msg: msg,
+                elapsed: elapsedStr,
+                currentLux: val,
+                baseline: baseline,
+                timestamp: Date.now()
+            });
+
+            client.publish('luminaguard/monitor/state', payload);
+        }
+
+        timerInterval = setInterval(() => {
+            if(isRunning) {
+                activeSeconds++;
+                const m = String(Math.floor(activeSeconds / 60)).padStart(2, '0');
+                const s = String(activeSeconds % 60).padStart(2, '0');
+                document.getElementById('elapsedTimer').innerText = `${m}:${s}`;
+            }
+        }, 1000);
+
+        window.toggleSystem = function() {
+            isRunning = !isRunning;
+            logDebug(isRunning ? "Node activated." : "Node deactivated.");
+        }
+    </script>
+</body>
+</html>
+
