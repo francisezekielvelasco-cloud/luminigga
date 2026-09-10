@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuminaGuard - Master Monitor Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #090d16;
+            --surface: #131c31;
+            --surface-border: #1e293b;
+            --accent-cyan: #06b6d4;
+            --accent-red: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .dashboard {
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            width: 100%;
+            max-width: 400px;
+            padding: 24px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+        .header h1 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+        .header p { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 20px; }
+
+        .console-status {
+            font-family: 'Share Tech Mono', monospace; font-size: 1rem; padding: 16px; border-radius: 10px;
+            font-weight: bold; text-transform: uppercase; margin-bottom: 20px; border: 1px solid var(--surface-border);
+        }
+        .status-normal { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+        .status-warning { background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); }
+        .status-alarm { background: rgba(239, 68, 68, 0.25); color: #f87171; animation: flashPulse 0.6s infinite alternate; border-color: #ef4444; }
+        @keyframes flashPulse { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0.7; transform: scale(0.98); } }
+
+        .time-box {
+            background: rgba(15, 23, 42, 0.6); border: 1px solid var(--surface-border); border-radius: 10px; padding: 16px; margin-bottom: 20px;
+        }
+        .time-box span { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+        .time-value { font-family: 'Share Tech Mono', monospace; font-size: 2.2rem; font-weight: bold; color: #fbbf24; margin-top: 4px; }
+
+        .action-btn {
+            width: 100%; background: linear-gradient(135deg, #0284c7, #0369a1); color: white; border: none;
+            padding: 14px; border-radius: 10px; font-weight: 600; font-size: 0.95rem; cursor: pointer; text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard">
+        <div class="header">
+            <h1>Master Console</h1>
+            <p>Remote Receiver Unit</p>
+        </div>
+
+        <div id="consoleStatus" class="console-status status-normal">SYSTEM STANDBY</div>
+
+        <div class="time-box">
+            <span>Duration Timer</span>
+            <div id="remoteElapsed" class="time-value">00:00</div>
+        </div>
+
+        <button id="activateAudioBtn" class="action-btn" onclick="enableAudioEngine()">Enable Audio Receiver</button>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyAP0XMRgXZxUR54P4v8pNB3-OfKIasMHxo",
+            authDomain: "luminaguard-b2623.firebaseapp.com",
+            databaseURL: "https://luminaguard-b2623-default-rtdb.firebaseio.com",
+            projectId: "luminaguard-b2623",
+            storageBucket: "luminaguard-b2623.firebasestorage.app",
+            messagingSenderId: "180119051664",
+            appId: "1:180119051664:web:d1767dd59f34ee2cd6e715"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        const consoleStatus = document.getElementById('consoleStatus');
+        const remoteElapsed = document.getElementById('remoteElapsed');
+        const activateAudioBtn = document.getElementById('activateAudioBtn');
+
+        let audioCtx = null;
+        let alarmInterval = null;
+        let isAudioEnabled = false;
+        let lastState = "NORMAL";
+
+        function enableAudioEngine() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            isAudioEnabled = true;
+            activateAudioBtn.innerText = "Receiver Active & Listening";
+            activateAudioBtn.style.background = "#059669";
+            
+            // Listen to the shared database root node
+            db.ref('luminaguard_state').on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (!data) return;
+
+                remoteElapsed.innerText = data.elapsed || '00:00';
+                consoleStatus.innerText = data.msg || 'System Standby';
+
+                if (data.status === 'NORMAL') {
+                    consoleStatus.className = "console-status status-normal";
+                    if (lastState === 'ALARM') stopAlarm();
+                    lastState = 'NORMAL';
+                } else if (data.status === 'WARNING') {
+                    consoleStatus.className = "console-status status-warning";
+                    if (lastState === 'ALARM') stopAlarm();
+                    lastState = 'WARNING';
+                } else if (data.status === 'ALARM') {
+                    consoleStatus.className = "console-status status-alarm";
+                    if (lastState !== 'ALARM') {
+                        triggerSiren(data.msg);
+                    }
+                    lastState = 'ALARM';
+                }
+            });
+        }
+
+        function triggerSiren(alertText) {
+            if (!isAudioEnabled) return;
+            playBeepSiren();
+
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const speech = new SpeechSynthesisUtterance(`Warning alert. ${alertText}. Check the room immediately.`);
+                speech.rate = 1.0;
+                speech.pitch = 1.05;
+                window.speechSynthesis.speak(speech);
+            }
+        }
+
+        function playBeepSiren() {
+            try {
+                if (alarmInterval) return;
+                
+                const playTone = () => {
+                    if (!audioCtx) return;
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.3);
+                    
+                    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                    
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.3);
+                };
+
+                playTone();
+                alarmInterval = setInterval(playTone, 600);
+            } catch (e) {
+                console.error("Audio error:", e);
+            }
+        }
+
+        function stopAlarm() {
+            if (alarmInterval) {
+                clearInterval(alarmInterval);
+                alarmInterval = null;
+            }
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+            }
+        }
+    </script>
+</body>
+</html>
+
